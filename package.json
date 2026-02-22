@@ -1,0 +1,15 @@
+{
+  "name": "bankr-demo",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=apps/web",
+    "build": "npm run build --workspace=apps/web",
+    "agent": "npm run start --workspace=packages/agent",
+    "agent:dev": "npm run dev --workspace=packages/agent"
+  }
+}
