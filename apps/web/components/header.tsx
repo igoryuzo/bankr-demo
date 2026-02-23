@@ -51,7 +51,7 @@ export function Header({ startedAt }: { startedAt: Date }) {
           className="flex items-center gap-1.5 text-xs text-muted font-mono px-2 py-0.5 rounded bg-card border border-border hover:border-accent/40 hover:text-foreground transition-colors cursor-pointer"
           title="Copy wallet address"
         >
-          <span>{WALLET_ADDRESS.slice(0, 6)}...{WALLET_ADDRESS.slice(-4)}</span>
+          <span>Agent Wallet: {WALLET_ADDRESS.slice(0, 6)}...{WALLET_ADDRESS.slice(-4)}</span>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={copied ? "text-accent" : ""}>
             {copied ? (
               <polyline points="20 6 9 17 4 12" />
