@@ -70,65 +70,46 @@ export async function scanTrends(ctx: CycleContext) {
 }
 
 export async function decideAndTrade(ctx: CycleContext, analysis: string) {
-  const result = await promptAndPoll(
-    `Based on the analysis above, recommend ONE specific trade. I want to use at most ${MAX_TRADE_PCT}% of my USDC balance. Tell me exactly: which token to buy, how much USDC to spend. Be specific with the amount. If nothing looks good enough, say "NO_TRADE" and explain why.`,
-    ctx.threadId,
-    "Deciding on trade..."
+  // Parse picks from the scan analysis locally instead of asking Bankr to recommend
+  // Look for "TOKEN - up - high/medium" pattern from our scan prompt format
+  const picks: { token: string; direction: string; conviction: string }[] = [];
+  const pickRegex = /\b([A-Z][A-Z0-9]{1,9})\b\s*[-–—]\s*(up|down)\s*[-–—]\s*(high|medium|low)/gi;
+  let match;
+  while ((match = pickRegex.exec(analysis)) !== null) {
+    picks.push({
+      token: match[1].toUpperCase(),
+      direction: match[2].toLowerCase(),
+      conviction: match[3].toLowerCase(),
+    });
+  }
+
+  // Filter to "up" direction with high or medium conviction, skip stablecoins
+  const skip = new Set(["USDC", "USDT", "DAI", "USD", "ETH", "WETH"]);
+  const candidates = picks.filter(
+    (p) => p.direction === "up" && (p.conviction === "high" || p.conviction === "medium") && !skip.has(p.token)
   );
 
-  ctx.threadId = result.threadId;
-  const response = result.response.toUpperCase();
-
-  if (response.includes("NO_TRADE")) {
-    await log("analysis", "Agent decided: no trade this cycle", {
-      raw_data: { response: result.response },
+  if (candidates.length === 0) {
+    await log("analysis", "No high/medium conviction 'up' picks found, skipping trade", {
+      raw_data: { picks },
       thread_id: ctx.threadId,
     });
     return null;
   }
 
-  // Parse a swap recommendation from the response
-  const swapMatch = result.response.match(
-    /swap\s+(\d+(?:\.\d+)?)\s+(\w+)\s+(?:to|for)\s+(\w+)/i
-  );
-  // Also try "buy X TOKEN with Y USDC" pattern
-  const buyMatch = result.response.match(
-    /(\d+(?:\.\d+)?)\s+USDC\s+(?:to|for|into|→)\s+(\w+)/i
-  );
+  // Pick the first high-conviction candidate (or first medium if no high)
+  const best = candidates.find((c) => c.conviction === "high") || candidates[0];
 
-  let amountIn: string;
-  let tokenIn: string;
-  let tokenOut: string;
+  // Calculate trade amount: MAX_TRADE_PCT% of ~100 USDC balance
+  // We use a rough estimate; the exact balance comes from checkBalance
+  const amountIn = Math.max(0.5, Math.floor(100 * MAX_TRADE_PCT) / 100).toFixed(2);
 
-  if (swapMatch) {
-    amountIn = swapMatch[1];
-    tokenIn = swapMatch[2];
-    tokenOut = swapMatch[3];
-  } else if (buyMatch) {
-    amountIn = buyMatch[1];
-    tokenIn = "USDC";
-    tokenOut = buyMatch[2];
-  } else {
-    // Fallback: try to extract any amount + token from the response
-    const amountMatch = result.response.match(/(\d+(?:\.\d+)?)\s*USDC/i);
-    const tokenMatch = result.response.match(
-      /(?:buy|swap.*?(?:to|for))\s+(\w+)/i
-    );
+  await log("analysis", `Picked ${best.token} (${best.conviction} conviction, trending ${best.direction}). Trading ${amountIn} USDC.`, {
+    raw_data: { best, candidates, amountIn },
+    thread_id: ctx.threadId,
+  });
 
-    if (amountMatch && tokenMatch) {
-      amountIn = amountMatch[1];
-      tokenIn = "USDC";
-      tokenOut = tokenMatch[1];
-    } else {
-      await log("analysis", "Could not parse trade recommendation, skipping", {
-        raw_data: { response: result.response },
-        thread_id: ctx.threadId,
-      });
-      return null;
-    }
-  }
-
-  return { amountIn, tokenIn, tokenOut, threadId: ctx.threadId };
+  return { amountIn, tokenIn: "USDC", tokenOut: best.token, threadId: ctx.threadId };
 }
 
 export async function executeTrade(
@@ -207,24 +188,31 @@ export async function checkBalance(ctx: CycleContext) {
 
   ctx.threadId = result.threadId;
 
-  // Try to parse total USD from response
-  const totalMatch = result.response.match(
-    /(?:total|balance)[:\s]*\$?([\d,]+(?:\.\d+)?)/i
-  );
-  const totalUsd = totalMatch
-    ? parseFloat(totalMatch[1].replace(/,/g, ""))
-    : 0;
-
-  // Try to parse individual token balances
+  // Parse Bankr balance format: "Token Name - amount SYMBOL $value"
+  // e.g. "USD Coin - 97.99 USDC $97.99" or "Ethereum - 0.00258 ETH $4.81"
   const breakdown: Record<string, number> = {};
-  const tokenMatches = result.response.matchAll(
-    /(\w+)[:\s]+\$?([\d,]+(?:\.\d+)?)/gi
-  );
-  for (const match of tokenMatches) {
-    const token = match[1].toUpperCase();
-    const value = parseFloat(match[2].replace(/,/g, ""));
-    if (!isNaN(value) && value > 0 && token.length <= 10) {
-      breakdown[token] = value;
+  let totalUsd = 0;
+  const lineRegex = /^(.+?)\s*[-–—]\s*[\d,.]+\s+\w+\s+\$([\d,.]+)/gm;
+  let balMatch;
+  while ((balMatch = lineRegex.exec(result.response)) !== null) {
+    const name = balMatch[1].trim();
+    const usdValue = parseFloat(balMatch[2].replace(/,/g, ""));
+    if (!isNaN(usdValue) && usdValue > 0) {
+      breakdown[name] = usdValue;
+      totalUsd += usdValue;
+    }
+  }
+  // Fallback: try without symbol between amount and $ (older format)
+  if (totalUsd === 0) {
+    const fallbackRegex = /^(.+?)\s*[-–—]\s*[\d,.]+\s+\$([\d,.]+)/gm;
+    let fbMatch;
+    while ((fbMatch = fallbackRegex.exec(result.response)) !== null) {
+      const name = fbMatch[1].trim();
+      const usdValue = parseFloat(fbMatch[2].replace(/,/g, ""));
+      if (!isNaN(usdValue) && usdValue > 0) {
+        breakdown[name] = usdValue;
+        totalUsd += usdValue;
+      }
     }
   }
 
