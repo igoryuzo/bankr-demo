@@ -192,6 +192,8 @@ claude plugin install bankr-agent
 ## Links
 
 - [Bankr](https://bankr.bot) — AI-powered crypto trading
+- [Bankr Docs](https://docs.bankr.bot/) — Full documentation
+- [Bankr LLM Docs](https://docs.bankr.bot/llms.txt) — LLM-friendly documentation (for AI agents and tools)
 - [Bankr API Docs](https://bankr.bot/api) — Agent API documentation
 - [Bankr API Examples](https://github.com/BankrBot/bankr-api-examples) — Example apps
 - [@bankr/cli](https://www.npmjs.com/package/@bankr/cli) — CLI/SDK package
